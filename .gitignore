@@ -218,3 +218,21 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---- Datos de participantes: NO subir ----
+data/
+*.csv
+*.xlsx
+*.xls
+*.sav
+*.dta
+# Salidas con datos individuales
+results/
+*.RData
+
+# ---- R ----
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
