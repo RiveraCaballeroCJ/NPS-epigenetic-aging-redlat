@@ -1,4 +1,4 @@
-# NPS-epigenetic-aging-redlat
+# NPS-epigenetic-aging-ReDLat
 Code for: Associations between Neuropsychiatric symptoms and epigenetic age acceleration in ReDLat
 
 # Neuropsychiatric symptoms and epigenetic age acceleration (ReDLat)
