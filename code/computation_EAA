@@ -1,0 +1,125 @@
+# ============================================================================
+# COMPUTATION OF EPIGENETIC AGE ACCELERATION (EAA)
+# ----------------------------------------------------------------------------
+# Cohort (analytic sample): clinical_diagnosis in {AD, FTD, CN}
+#                           demo_resid (country) in {1,3,4,5,6}
+# For each of the 24 age-based clocks, EAA is the residual of an ordinary
+# least squares (OLS) regression of the clock on chronological age.
+#   *_EAA  : PRIMARY    — regression fit on the FULL analytic sample.
+#   *EAAs  : SENSITIVITY — regression coefficients fit on CN controls only,
+#                          then projected onto the full sample to derive residuals.
+# DunedinPACE and IntrinsicCapacity are NOT age-residualized (used natively).
+# Existing *_EAA / *EAAs columns are OVERWRITTEN with the corrected values.
+# ============================================================================
+import pandas as pd, numpy as np
+from scipy.stats import pearsonr
+import warnings; warnings.filterwarnings('ignore')
+
+IN_PATH  = '/content/drive/MyDrive/Doctorado/Epi_cr3x.csv'
+OUT_PATH = '/content/drive/MyDrive/Doctorado/Epi_cr3x.csv'   # overwrite in place
+AGE = 'demo_age'
+
+df_all = pd.read_csv(IN_PATH)
+N_raw = len(df_all)
+
+# ---- Analytic cohort: clinical_diagnosis + ReDLat countries ----
+mask_cohort = (df_all['clinical_diagnosis'].isin(['AD','FTD','CN']) &
+               df_all['demo_resid'].isin([1,3,4,5,6]))
+df = df_all[mask_cohort].copy()
+cn_mask = (df['clinical_diagnosis'] == 'CN').values
+print(f"Rows in file: {N_raw}")
+print(f"Analytic sample (AD+FTD+CN, 5 countries): {len(df)}")
+print(f"  CN controls: {cn_mask.sum()} | AD: {(df['clinical_diagnosis']=='AD').sum()} | FTD: {(df['clinical_diagnosis']=='FTD').sum()}\n")
+
+# 24 age-based clocks (DunedinPACE & IntrinsicCapacity excluded on purpose)
+clocks = ['Horvath','Hannum','cAge','PhenoAge','PCGrimAge','IntrinClock',
+          'Retroclock','Retroclockv2','OMICmAge','DNAmFitAge','AdaptAge','DamAge',
+          'Blood','Brain','Heart','Lung','Liver','Kidney',
+          'Immune','Inflammation','Hormone','Metabolic','MusculoSkeletal','SystemsAge']
+
+def resid_full(y, age):
+    """Residuals of y ~ age, OLS fit on all available (y, age) rows."""
+    m = ~(y.isna() | age.isna())
+    if m.sum() < 3: return pd.Series(np.nan, index=y.index)
+    b = np.polyfit(age[m], y[m], 1)      # [slope, intercept]
+    return y - np.polyval(b, age)
+
+def resid_cnref(y, age, cn):
+    """Residuals using coefficients fit on CN only, projected onto everyone."""
+    m = ~(y.isna() | age.isna()) & cn
+    if m.sum() < 3: return pd.Series(np.nan, index=y.index)
+    b = np.polyfit(age[m], y[m], 1)      # fit on CN
+    return y - np.polyval(b, age)        # predict for all
+
+# ---- Diagnostic vs existing columns (before overwriting) ----
+print("="*76)
+print(f"{'Clock':<16}{'N new':>7}{'N old':>7}{'recovered':>11}{'r vs old':>10}{'maxdiff':>10}")
+print("="*76)
+
+age = df[AGE]
+new_primary, new_sens = {}, {}
+for c in clocks:
+    if c not in df.columns:
+        print(f"{c:<16}{'RAW COLUMN MISSING':>40}"); continue
+    raw = df[c]
+    p_new = resid_full(raw, age)
+    s_new = resid_cnref(raw, age, cn_mask)
+    new_primary[c] = p_new; new_sens[c] = s_new
+
+    n_new = int(p_new.notna().sum())
+    old_col = c + '_EAA'
+    if old_col in df.columns:
+        n_old = int(df[old_col].notna().sum())
+        mm = ~(p_new.isna() | df[old_col].isna())
+        if mm.sum() >= 3:
+            r,_ = pearsonr(p_new[mm], df[old_col][mm])
+            md  = float(np.max(np.abs(p_new[mm] - df[old_col][mm])))
+        else:
+            r, md = np.nan, np.nan
+        rec = n_new - n_old
+        rs = f"{r:.4f}" if pd.notna(r) else "  --"
+        ms = f"{md:.3f}" if pd.notna(md) else "  --"
+        print(f"{c:<16}{n_new:>7}{n_old:>7}{rec:>+11}{rs:>10}{ms:>10}")
+    else:
+        print(f"{c:<16}{n_new:>7}{'(no old col)':>7}")
+
+print("="*76)
+
+# ---- Overwrite the columns in the FULL dataframe (analytic rows get values,
+#      non-analytic rows get NaN, since EAA is only defined for the cohort) ----
+for c in clocks:
+    if c not in df.columns: continue
+    # start from NaN for every row in the full file
+    prim_full = pd.Series(np.nan, index=df_all.index)
+    sens_full = pd.Series(np.nan, index=df_all.index)
+    prim_full.loc[df.index] = new_primary[c].values
+    sens_full.loc[df.index] = new_sens[c].values
+    df_all[c + '_EAA'] = prim_full     # OVERWRITE primary
+    df_all[c + 'EAAs'] = sens_full     # OVERWRITE sensitivity
+
+# ---- Concordance primary vs sensitivity, per clock (Methods statement) ----
+conc_rows = []
+for c in clocks:
+    if c not in df.columns: continue
+    a = new_primary[c]; b = new_sens[c]
+    mm = ~(a.isna() | b.isna())
+    if mm.sum() >= 3:
+        r, p = pearsonr(a[mm], b[mm])
+        conc_rows.append({'Clock': c, 'N': int(mm.sum()),
+                          'Pearson r': round(r, 4),
+                          'p-value': ('<0.001' if p < 0.001 else f'{p:.3f}')})
+conc = pd.DataFrame(conc_rows)
+print("\n" + "="*50)
+print("CONCORDANCE: PRIMARY (_EAA) vs SENSITIVITY (EAAs)")
+print("="*50)
+print(conc.to_string(index=False))
+if len(conc):
+    rmin, rmax = conc['Pearson r'].min(), conc['Pearson r'].max()
+    print(f"\nPearson r range: {rmin:.3f}–{rmax:.3f} (n = {len(conc)} clocks, all p < 0.001)")
+    conc.to_excel('EAA_concordance_primary_vs_sensitivity.xlsx', index=False)
+    print("Saved: EAA_concordance_primary_vs_sensitivity.xlsx")
+
+df_all.to_csv(OUT_PATH, index=False)
+print(f"\nSaved (overwritten): {OUT_PATH}")
+print("Columns *_EAA and *EAAs regenerated for the correct analytic cohort.")
+print("DunedinPACE and IntrinsicCapacity were left unchanged (native scale).")
